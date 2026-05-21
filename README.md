@@ -12,7 +12,7 @@ An AI-powered resume analysis system built with Next.js. Upload a PDF or text re
 ### Installation
 
 ```bash
-git clone [<repo-url>](https://github.com/tejas261/intelligent-resume-assistant)
+git clone https://github.com/tejas261/intelligent-resume-assistant
 cd intelligent-resume-assistant
 npm install
 ```
