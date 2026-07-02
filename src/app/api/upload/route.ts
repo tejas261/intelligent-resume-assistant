@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { extractTextFromPDF } from "@/lib/pdf-parser";
 import { structureResume } from "@/lib/resume-structurer";
 import { createSession } from "@/lib/session";
+import { ingestResume } from "@/lib/rag/ingest";
 
 export async function POST(request: NextRequest) {
   try {
@@ -49,6 +50,9 @@ export async function POST(request: NextRequest) {
       messages: [],
       created_at: Date.now(),
     });
+
+    // Build the RAG index (chunk -> embed -> FAISS) for this resume.
+    await ingestResume(sessionId, resume);
 
     return NextResponse.json({ sessionId, resume });
   } catch (error) {

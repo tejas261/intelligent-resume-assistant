@@ -1,7 +1,30 @@
 import type { ResumeData } from "@/types";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
+import { semanticSearch } from "./rag/vector-store";
 
 export const toolDefinitions: ChatCompletionTool[] = [
+  {
+    type: "function",
+    function: {
+      name: "semantic_search",
+      description:
+        "Semantically search the candidate's full resume using RAG (embeddings + vector similarity). Use this for open-ended, conceptual, or fuzzy questions where the exact wording may differ from the resume (e.g. 'does this candidate have leadership experience?', 'what backend work have they done?'). Returns the most relevant passages with similarity scores.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "The natural-language query to search for.",
+          },
+          top_k: {
+            type: "number",
+            description: "Number of passages to retrieve (default 4).",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  },
   {
     type: "function",
     function: {
@@ -185,12 +208,44 @@ export function extractKeywords(
     .map(([keyword, count]) => ({ keyword, count }));
 }
 
-export function executeTool(
+export interface ToolContext {
+  resume: ResumeData;
+  sessionId: string;
+}
+
+// Minimum similarity for a retrieved chunk to be considered relevant.
+// Below this we tell the model nothing was found, so it grounds its
+// "Not mentioned in resume" guardrail in retrieval rather than guessing.
+const RELEVANCE_THRESHOLD = 0.25;
+
+export async function executeTool(
   name: string,
   args: Record<string, unknown>,
-  resume: ResumeData
-): string {
+  ctx: ToolContext
+): Promise<string> {
+  const { resume, sessionId } = ctx;
+
   switch (name) {
+    case "semantic_search": {
+      const results = await semanticSearch(
+        sessionId,
+        args.query as string,
+        (args.top_k as number) ?? 4
+      );
+      const relevant = results.filter((r) => r.score >= RELEVANCE_THRESHOLD);
+      if (relevant.length === 0) {
+        return JSON.stringify({
+          results: [],
+          note: "No sufficiently relevant passages found in the resume for this query.",
+        });
+      }
+      return JSON.stringify({
+        results: relevant.map((r) => ({
+          text: r.text,
+          score: Number(r.score.toFixed(3)),
+        })),
+      });
+    }
     case "search_resume_section":
       return searchResumeSection(resume, args.section as string);
     case "match_skills":

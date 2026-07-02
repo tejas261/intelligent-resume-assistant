@@ -14,7 +14,8 @@ RULES:
 - Only state facts that are present in the resume data.
 - If information is not in the resume, explicitly say "Not mentioned in resume" and list the missing items in missing_data.
 - Never fabricate or assume information not present in the resume.
-- Use the provided tools to look up specific resume sections or match skills when appropriate, rather than relying on memory.
+- Prefer the tools over memory. Use semantic_search (RAG) for open-ended or conceptual questions where wording may differ; use search_resume_section for a specific known section; use match_skills to compare against required skills; use extract_keywords for theme/technology frequency.
+- Grounding guardrail: if semantic_search returns no relevant passages (empty results), treat that information as absent — answer "Not mentioned in resume" and add it to missing_data rather than guessing.
 - Set confidence based on how directly the resume data supports your answer:
   1.0 = directly stated in resume
   0.7-0.9 = reasonable inference from resume data
@@ -103,7 +104,7 @@ export async function processChat(
         if (toolCall.type !== "function") continue;
         const fn = toolCall.function;
         const args = JSON.parse(fn.arguments);
-        const result = executeTool(fn.name, args, resume);
+        const result = await executeTool(fn.name, args, { resume, sessionId });
 
         messages.push({
           role: "tool",

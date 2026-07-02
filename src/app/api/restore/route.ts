@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSession, getSession } from "@/lib/session";
+import { ingestResume } from "@/lib/rag/ingest";
 import type { ResumeData, Message } from "@/types";
 
 export async function POST(request: NextRequest) {
@@ -28,6 +29,10 @@ export async function POST(request: NextRequest) {
       messages: messages || [],
       created_at: Date.now(),
     });
+
+    // Rebuild the RAG index. On restore the client may not have persisted
+    // raw_text, so ingestResume falls back to the structured fields.
+    await ingestResume(sessionId, resume);
 
     return NextResponse.json({ ok: true });
   } catch (error) {
