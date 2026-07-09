@@ -17,14 +17,16 @@ resume text
 chunks ──► embed (all-MiniLM-L6-v2, local, 384-dim, normalized)
    │
    ▼
-FAISS IndexFlatIP (inner product = cosine similarity)
+Chroma Cloud collection (cosine space, `sessionId`-scoped)
    │
    ▼  query embedded the same way, top-k nearest
 retrieved passages ──► given to the LLM as a `semantic_search` tool result
 ```
 
-Everything runs locally — no embedding API key required (embeddings via
-`@xenova/transformers`, vector search via `faiss-node`).
+Embeddings are computed **locally** (no embedding API key — via
+`@xenova/transformers`) and the vectors are stored/searched in **Chroma Cloud**,
+a managed vector database. This keeps the index durable across serverless cold
+starts (the app runs on Vercel), which an in-process index cannot.
 
 ## Architecture
 
@@ -34,8 +36,8 @@ Everything runs locally — no embedding API key required (embeddings via
 |------|----------------|
 | `src/lib/rag/embeddings.ts` | Loads `all-MiniLM-L6-v2` once (singleton) and turns text into 384-dim normalized vectors. |
 | `src/lib/rag/chunker.ts` | Splits text into overlapping chunks; also flattens a structured resume to text for the restore path. |
-| `src/lib/rag/vector-store.ts` | Per-session FAISS index (`IndexFlatIP`); `buildIndex` and `semanticSearch`. |
-| `src/lib/rag/ingest.ts` | Orchestrates resume text → chunks → embeddings → FAISS index. |
+| `src/lib/rag/vector-store.ts` | Chroma Cloud client + a single `sessionId`-scoped collection; `buildIndex` and `semanticSearch`. |
+| `src/lib/rag/ingest.ts` | Orchestrates resume text → chunks → embeddings → Chroma index. |
 | `src/lib/tools.ts` | Adds the `semantic_search` tool the agent can call; `executeTool` is now async. |
 | `src/lib/agent.ts` | Awaits async tools; system prompt teaches when to use RAG and grounds the guardrail in retrieval. |
 
@@ -78,9 +80,9 @@ Uses `Xenova/all-MiniLM-L6-v2` via `@xenova/transformers`, running locally.
   closeness. "Node.js backend" and "Express server" land near each other;
   "watercolor painting" lands far away.
 - `pooling: 'mean'` collapses per-token vectors into one vector per chunk.
-- `normalize: true` makes every vector unit length, so **inner product equals
-  cosine similarity** — which is why the FAISS index can use plain inner
-  product below.
+- `normalize: true` makes every vector unit length, so cosine similarity is a
+  clean, well-scaled measure of relevance — which is what the Chroma collection
+  is configured to use (cosine space).
 - The model is loaded as a **singleton** (~90 MB, downloaded once then cached);
   reloading per request would be far too slow.
 - **Why local instead of OpenAI embeddings?** No API key, no per-call cost, and
@@ -90,19 +92,31 @@ Uses `Xenova/all-MiniLM-L6-v2` via `@xenova/transformers`, running locally.
 
 ### 3. Vector store — `vector-store.ts`
 
-A FAISS `IndexFlatIP` (flat, exact inner-product search) is built **per
-session** and held in memory, mirroring the existing in-memory session store.
+A **single Chroma Cloud collection** (`resume_chunks`, cosine space) holds every
+session's chunks. Instead of one index object per session, each chunk carries a
+`sessionId` in its metadata and every read/write is scoped by a
+`where: { sessionId }` filter — the standard multi-tenant pattern for a hosted
+vector DB.
 
-- `buildIndex`: embeds all chunks and adds them as one flat array
-  (`faiss-node` expects `n * dim` numbers in a single array).
-- `semanticSearch`: embeds the query the same way, runs `index.search(query, k)`,
-  and maps the returned labels (insertion indices) back to the chunk text,
-  returning each with its similarity score.
-- **Why `IndexFlatIP` (exact) rather than an approximate index (HNSW/IVF)?**
-  A resume has only a handful of chunks; exact search is instant and has 100%
-  recall. At scale (millions of vectors) you'd switch to an ANN index like
-  HNSW, trading a little recall for a large speed gain — that's the key
-  scaling lever.
+- `buildIndex`: deletes the session's existing chunks (replace semantics, so a
+  shorter new resume can't leave stale chunks behind), then embeds all chunks
+  locally and `add`s them with precomputed `embeddings`, `documents`, and
+  `{ sessionId }` metadata. Chunk ids are `${sessionId}#${i}` — unique across
+  the shared collection.
+- `semanticSearch`: embeds the query the same way and calls `collection.query`
+  with `queryEmbeddings`, `nResults`, and the `sessionId` filter. Chroma returns
+  cosine **distance**; we convert to similarity (`score = 1 - distance`) so the
+  rest of the app keeps its "higher = more relevant" contract and the
+  `RELEVANCE_THRESHOLD` logic is unchanged.
+- **Bring-your-own embeddings:** the collection is created with
+  `embeddingFunction: null`. We always pass our own locally-computed vectors, so
+  Chroma never has to embed anything server-side — keeping the embedding model
+  identical for indexing and querying.
+- **Why Chroma Cloud rather than in-process FAISS?** The app is deployed on
+  Vercel, where the filesystem is ephemeral and functions are short-lived — an
+  in-memory index would be rebuilt on every cold start. A managed store keeps
+  the index durable and multi-tenant. Chroma uses an HNSW (approximate) index
+  under the hood, which scales far past a single resume.
 
 ### 4. The agent tool — `tools.ts` + `agent.ts`
 
@@ -156,14 +170,24 @@ chunk size, the embedding model, or the threshold changes.
 
 ## Running it
 
-The native modules are declared in `next.config.ts`:
+Native modules that must not be bundled are declared in `next.config.ts`:
 
 ```ts
-serverExternalPackages: ["pdf-parse", "@xenova/transformers", "faiss-node"]
+serverExternalPackages: ["pdf-parse", "@xenova/transformers"]
+```
+
+Set the Chroma Cloud credentials (locally in `.env.local`, and in the Vercel
+project's environment variables for deployment):
+
+```
+CHROMA_API_KEY=...
+CHROMA_TENANT=...
+CHROMA_DATABASE=...
 ```
 
 > Requires Node.js >= 20.9 (Next.js 16). On first run, the embedding model
-> (~90 MB) downloads and is cached.
+> (~90 MB) downloads and is cached. The eval harness (`npm run eval:rag`) talks
+> to Chroma Cloud, so it needs those same credentials.
 
 ```bash
 npm install
@@ -182,8 +206,9 @@ npm run build    # production build (TypeScript-checked)
 - **Grow the eval set** — the current harness (see above) uses one sample
   resume; expand to many resumes and more questions so the hit-rate reflects
   real retrieval difficulty.
-- **Persistent / multi-tenant vector store** — move from per-session in-memory
-  FAISS to a persistent store and an ANN index for scale across many resumes.
+- **Skip re-embedding on restore** — now that the vector store is persistent
+  (Chroma Cloud), a restored session whose chunks already exist could reuse them
+  (`hasIndex`) instead of re-embedding, saving work on the restore path.
 
 ## Glossary (quick reference)
 

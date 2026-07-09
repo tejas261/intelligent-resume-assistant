@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
       created_at: Date.now(),
     });
 
-    // Build the RAG index (chunk -> embed -> FAISS) for this resume.
+    // Build the RAG index (chunk -> embed -> Chroma) for this resume.
     await ingestResume(sessionId, resume);
 
     return NextResponse.json({ sessionId, resume });

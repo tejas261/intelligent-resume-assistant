@@ -4,7 +4,7 @@ import { buildIndex } from "./vector-store";
 
 /**
  * Ingest a resume into the RAG index for a session:
- * resume text -> chunks -> embeddings -> FAISS index.
+ * resume text -> chunks -> embeddings -> Chroma index.
  *
  * Prefers raw_text (the full original document). Falls back to a flattened
  * view of the structured fields when raw_text is missing (e.g. on restore,
