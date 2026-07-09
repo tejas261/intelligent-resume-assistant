@@ -17,6 +17,13 @@ export async function chatWithRetry(
       return await openai.chat.completions.create(params) as ChatCompletion;
     } catch (err: unknown) {
       const status = (err as { status?: number }).status;
+      const code = (err as { code?: string }).code;
+      // Llama on Groq occasionally emits a malformed tool call as plain text,
+      // which Groq rejects with `tool_use_failed`. It's transient — retry.
+      if (code === "tool_use_failed" && attempt < maxRetries) {
+        console.log(`Malformed tool call from model. Retry ${attempt + 1}/${maxRetries}...`);
+        continue;
+      }
       if (status === 429 && attempt < maxRetries) {
         const retryAfter = (err as { headers?: { get?: (k: string) => string | null } }).headers?.get?.("retry-after");
         const delay = retryAfter
