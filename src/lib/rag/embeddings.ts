@@ -1,4 +1,14 @@
-import { pipeline, type FeatureExtractionPipeline } from "@xenova/transformers";
+import {
+  env,
+  pipeline,
+  type FeatureExtractionPipeline,
+} from "@xenova/transformers";
+
+// On Vercel the default cache dir (inside node_modules) is read-only, so the
+// model re-downloads on every cold start. /tmp is the only writable path.
+if (process.env.VERCEL) {
+  env.cacheDir = "/tmp/transformers-cache";
+}
 
 // Singleton: load the model once, reuse across calls.
 let extractorPromise: Promise<FeatureExtractionPipeline> | null = null;
