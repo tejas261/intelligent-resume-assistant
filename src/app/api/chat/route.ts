@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { processChat } from "@/lib/agent";
 import { getSession } from "@/lib/session";
 
+// Tool loop can embed queries on a cold instance (model download) and make
+// multiple LLM calls; allow more than the default serverless timeout.
+export const maxDuration = 60;
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();

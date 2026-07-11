@@ -5,6 +5,10 @@ import { structureResume } from "@/lib/resume-structurer";
 import { createSession } from "@/lib/session";
 import { ingestResume } from "@/lib/rag/ingest";
 
+// Cold starts download the embedding model (~30 MB) before ingest can run;
+// the default serverless timeout is too tight for that.
+export const maxDuration = 60;
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();

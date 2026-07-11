@@ -3,6 +3,9 @@ import { createSession, getSession } from "@/lib/session";
 import { ingestResume } from "@/lib/rag/ingest";
 import type { ResumeData, Message } from "@/types";
 
+// Restore re-embeds the resume; cold starts also download the embedding model.
+export const maxDuration = 60;
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
